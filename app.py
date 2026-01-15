@@ -37,34 +37,33 @@ st.markdown("""
 
 # --- DATA ENGINE ---
 @st.cache_data
-def load_and_refine_data():
-    file_path = "Data Structure - Patents in UAE (Archistrategos) - All available types.csv"
-    df_raw = pd.read_csv(file_path)
+def load_data():
+    df_raw = pd.read_csv("Data Structure - Patents in UAE (Archistrategos) - All available types.csv")
     df_raw.columns = df_raw.columns.str.strip()
     
-    # Timeline: Use Earliest Priority Date
+    # Timeline: Extract Year-Month for accurate MA calculation
     df_raw['Earliest Priority Date'] = pd.to_datetime(df_raw['Earliest Priority Date'], errors='coerce')
     df_raw = df_raw.dropna(subset=['Earliest Priority Date'])
     
-    # Standardize Month Column for Time Series
-    df_raw['Month_TS'] = df_raw['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
-    df_raw['Year_Only'] = df_raw['Earliest Priority Date'].dt.year.astype(int)
+    # Store the Monthly format YYYY-MM for the precision of the calculation
+    df_raw['YYYY_MM'] = df_raw['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
     
-    # EXPLODE LOGIC: Count each IPC individually as requested
+    # EXPLODE LOGIC: Count each IPC as an individual instance
     df_raw['Classification'] = df_raw['Classification'].astype(str).str.split(',')
     df = df_raw.explode('Classification')
     df['Classification'] = df['Classification'].str.strip()
     
-    # Filter valid entries
+    # Remove rows with no specific data
     df = df[~df['Classification'].str.contains("no classification", case=False, na=False)]
     df = df[df['Classification'] != 'nan']
     
-    # Extract Section (A-H)
+    # Section Extraction for the Overview
     df['IPC_Section'] = df['Classification'].str[:1].str.upper()
+    df['Year_Int'] = df['Earliest Priority Date'].dt.year.astype(int)
     
     return df
 
-df = load_and_refine_data()
+df = load_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -78,82 +77,84 @@ with st.sidebar:
 
 # --- MODULE 1: CLASSIFICATION & GROWTH ---
 if menu == "Classification & Growth":
-    st.header("🌍 Classification Strength & Yearly Growth")
-    st.write("Each classification within a single application is counted individually.")
+    st.header("📊 Classification Distribution & Section Growth")
     
     valid_sections = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
     sect_df = df[df['IPC_Section'].isin(valid_sections)]
     
-    # Histogram
-    section_counts = sect_df.groupby('IPC_Section').size().reset_index(name='Count')
-    fig_hist = px.bar(section_counts, x='IPC_Section', y='Count', text='Count',
-                      title="Total Counts per IPC Section (A-H)",
-                      color_discrete_sequence=['#f39c12'], labels={'Count': 'Number of Applications'})
+    # 1. Volume Bar Chart
+    counts = sect_df.groupby('IPC_Section').size().reset_index(name='Apps')
+    fig_hist = px.bar(counts, x='IPC_Section', y='Apps', text='Apps', 
+                      title="Total Counts by IPC Section",
+                      color_discrete_sequence=['#FF6600'], 
+                      labels={'Apps': 'Number of Applications'})
     fig_hist.update_traces(textposition='outside')
     st.plotly_chart(fig_hist, use_container_width=True)
 
+    # 2. Yearly Growth of Sections
     st.markdown("---")
-    
-    # Temporal Line Chart
-    st.subheader("Section Growth over Time")
-    yearly_sect = sect_df.groupby(['Year_Only', 'IPC_Section']).size().reset_index(name='Count')
-    fig_growth = px.line(yearly_sect, x='Year_Only', y='Count', color='IPC_Section', markers=True,
-                         labels={'Count': 'Number of Applications', 'Year_Only': 'Year'})
-    st.plotly_chart(fig_growth, use_container_width=True)
+    st.subheader("Section Growth (Yearly Volume)")
+    yearly_growth = sect_df.groupby(['Year_Int', 'IPC_Section']).size().reset_index(name='Apps')
+    fig_line = px.line(yearly_growth, x='Year_Int', y='Apps', color='IPC_Section', markers=True,
+                       labels={'Apps': 'Number of Applications', 'Year_Int': 'Year'})
+    st.plotly_chart(fig_line, use_container_width=True)
 
 # --- MODULE 2: GROWTH ANALYSIS (MA ZOOM) ---
 elif menu == "Growth Analysis (MA Zoom)":
-    st.header("📈 Growth Analysis: 12-Month Moving Average")
-    st.info("The Y-axis shows the Number of Applications smoothed over a 12-month period based on Earliest Priority Date.")
+    st.header("📈 Yearly Growth Analysis (12-Month Moving Average)")
+    st.info("The Y-axis reflects the Number of Applications. The timeline shows Yearly increments based on a monthly calculated Moving Average.")
 
-    # Unique IPC Dropdown
+    # IPC Zoom Selection
     all_codes = sorted(df['Classification'].unique())
     target_ipc = st.selectbox("Select Individual IPC Code to Zoom:", ["Total (All Classifications)"] + all_codes)
 
-    # Filtering
+    # Accurate Filter
     if target_ipc == "Total (All Classifications)":
         analysis_df = df.copy()
     else:
         analysis_df = df[df['Classification'] == target_ipc]
 
     if analysis_df.empty:
-        st.error("No data found for this selection.")
+        st.error("No data found for the selected IPC.")
     else:
-        # Grouping by Month and Type
-        grouped = analysis_df.groupby(['Month_TS', 'Application Type (ID)']).size().reset_index(name='Monthly_Total')
+        # Group by the precision month (YYYY-MM) and Application Type
+        grouped = analysis_df.groupby(['YYYY_MM', 'Application Type (ID)']).size().reset_index(name='Counts')
         
-        # Pivot to ensure we have columns for types 1-5
-        pivot_df = grouped.pivot(index='Month_TS', columns='Application Type (ID)', values='Monthly_Total').fillna(0)
+        # Pivot so App Types are distinct lines
+        pivot_df = grouped.pivot(index='YYYY_MM', columns='Application Type (ID)', values='Counts').fillna(0)
         
-        # CONTINUOUS TIMELINE: Create a date range for all months in the dataset
-        full_range = pd.date_range(start=df['Month_TS'].min(), end=df['Month_TS'].max(), freq='MS')
+        # Continuous Monthly Timeline to ensure calculation accuracy (filling 0 for missing months)
+        full_range = pd.date_range(start=df['YYYY_MM'].min(), end=df['YYYY_MM'].max(), freq='MS')
         pivot_df = pivot_df.reindex(full_range, fill_value=0)
         
-        # CALCULATE 12-MONTH MOVING AVERAGE
-        ma_df = pivot_df.rolling(window=12).mean().reset_index().rename(columns={'index': 'Month'})
+        # Calculate the 12-Month Moving Average (The "Yearly" average at any month)
+        ma_df = pivot_df.rolling(window=12).mean().reset_index().rename(columns={'index': 'Timeline'})
         
-        # Prepare for Plotly
-        melted = ma_df.melt(id_vars='Month', var_name='App Type', value_name='MA_Value')
-        melted = melted.dropna() # Remove initial window buffer
+        # Melt for Plotting
+        melted = ma_df.melt(id_vars='Timeline', var_name='Type ID', value_name='MA_Value').dropna()
 
-        # Create Plot
-        fig_ma = px.line(melted, x='Month', y='MA_Value', color='App Type',
-                         title=f"12-Month Moving Average: {target_ipc}",
-                         labels={'MA_Value': 'Number of Applications', 'Month': 'Year (YYYY-MM)'},
+        # Create Graph
+        fig_ma = px.line(melted, x='Timeline', y='MA_Value', color='Type ID',
+                         title=f"Growth Trend (12-Month MA): {target_ipc}",
+                         labels={'MA_Value': 'Number of Applications', 'Timeline': 'Year'},
                          template='plotly_white')
 
-        # CONSISTENT X-AXIS: Ticks every 12 months, formatted YYYY-MM
+        # CLEAN X-AXIS: Just Years, no months, ticks every 12 months
         fig_ma.update_xaxes(
             dtick="M12", 
-            tickformat="%Y-%m",
+            tickformat="%Y", 
             showgrid=True,
-            title="Year (YYYY-MM)"
+            gridcolor='lightgrey',
+            title="Year"
         )
         
-        # CONSISTENT Y-AXIS LABEL
-        fig_ma.update_yaxes(title="Number of Applications", showgrid=True)
+        # Y-AXIS LABEL
+        fig_ma.update_yaxes(
+            title="Number of Applications",
+            showgrid=True
+        )
         
         fig_ma.update_layout(hovermode='x unified')
         st.plotly_chart(fig_ma, use_container_width=True)
         
-        st.write(f"Showing accurate application growth for **{target_ipc}** across Application Types.")
+        st.markdown(f"**Selected:** {target_ipc}. Each data point represents the 12-month smoothed volume of applications.")
