@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import hmac
 from PIL import Image
 
@@ -42,25 +43,31 @@ def load_and_refine_data():
     df_raw = pd.read_csv(file_path)
     df_raw.columns = df_raw.columns.str.strip()
     
-    # 1. Timeline Setup (Earliest Priority Date)
+    # 1. Timeline Setup
     df_raw['Earliest Priority Date'] = pd.to_datetime(df_raw['Earliest Priority Date'], errors='coerce')
-    df_raw = df_raw.dropna(subset=['Earliest Priority Date'])
-    df_raw['Month_TS'] = df_raw['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
+    df_raw['Application Date'] = pd.to_datetime(df_raw['Application Date'], errors='coerce')
+    
+    # Drop rows without critical dates
+    df_raw = df_raw.dropna(subset=['Earliest Priority Date', 'Application Date'])
+    
+    # Standardize Monthly Timestamps
+    df_raw['Priority_Month'] = df_raw['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
+    df_raw['Arrival_Month'] = df_raw['Application Date'].dt.to_period('M').dt.to_timestamp()
     df_raw['Year_Int'] = df_raw['Earliest Priority Date'].dt.year.astype(int)
     
     # 2. Explode IPCs (Every code counted separately)
-    df_raw['Classification'] = df_raw['Classification'].astype(str).str.split(',')
-    df = df_raw.explode('Classification')
-    df['Classification'] = df['Classification'].str.strip()
+    df_raw['Classification_Split'] = df_raw['Classification'].astype(str).str.split(',')
+    df = df_raw.explode('Classification_Split')
+    df['Classification_Clean'] = df['Classification_Split'].str.strip()
     
-    # Clean up empty rows
-    df = df[~df['Classification'].str.contains("no classification", case=False, na=False)]
-    df = df[df['Classification'] != 'nan']
-    df['IPC_Section'] = df['Classification'].str[:1].str.upper()
+    # Remove rows with no specific data
+    df = df[~df['Classification_Clean'].str.contains("no classification", case=False, na=False)]
+    df = df[df['Classification_Clean'] != 'nan']
+    df['IPC_Section'] = df['Classification_Clean'].str[:1].str.upper()
     
-    return df
+    return df, df_raw
 
-df = load_and_refine_data()
+df_exploded, df_original = load_and_refine_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -70,94 +77,115 @@ with st.sidebar:
     except:
         st.title("🏛️ ARCHISTRATEGOS")
     st.markdown("---")
-    menu = st.radio("Navigation", ["Classification & Growth", "Growth Analysis (MA Zoom)"])
+    menu = st.radio("Navigation", ["Classification & Growth", "Growth Analysis (MA Zoom)", "Workload Analysis"])
 
 # --- MODULE 1: CLASSIFICATION & GROWTH ---
 if menu == "Classification & Growth":
     st.header("📊 Individual IPC Distribution & Trends")
-    
     valid_sections = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
-    sect_df = df[df['IPC_Section'].isin(valid_sections)]
+    sect_df = df_exploded[df_exploded['IPC_Section'].isin(valid_sections)]
     
-    # Histogram
     counts = sect_df.groupby('IPC_Section').size().reset_index(name='Apps')
     fig_hist = px.bar(counts, x='IPC_Section', y='Apps', text='Apps', 
                       title="Total Counts by IPC Section",
                       color_discrete_sequence=['#FF6600'], 
                       labels={'Apps': 'Number of Applications'})
     fig_hist.update_traces(textposition='outside')
-    fig_hist.update_xaxes(showgrid=False) # No vertical lines
+    fig_hist.update_xaxes(showgrid=False)
     st.plotly_chart(fig_hist, use_container_width=True)
-
-    st.markdown("---")
-    
-    # Yearly Growth
-    st.subheader("Section Growth (Total Annual Volume)")
-    yearly_growth = sect_df.groupby(['Year_Int', 'IPC_Section']).size().reset_index(name='Apps')
-    fig_line = px.line(yearly_growth, x='Year_Int', y='Apps', color='IPC_Section', markers=True,
-                       labels={'Apps': 'Number of Applications', 'Year_Int': 'Year'})
-    fig_line.update_xaxes(showgrid=False) # No vertical lines
-    st.plotly_chart(fig_line, use_container_width=True)
 
 # --- MODULE 2: GROWTH ANALYSIS (MA ZOOM) ---
 elif menu == "Growth Analysis (MA Zoom)":
     st.header("📈 Growth Analysis: 12-Month Rolling Total")
-    st.info("The Y-axis shows the total number of applications filed in the 12 months preceding that point. This provides a smoothed, integer-based growth trend.")
-
-    # IPC Zoom Dropdown
-    all_codes = sorted(df['Classification'].unique())
+    all_codes = sorted(df_exploded['Classification_Clean'].unique())
     target_ipc = st.selectbox("Select Individual IPC Code to Zoom:", ["Total (All Classifications)"] + all_codes)
 
-    # Filter
     if target_ipc == "Total (All Classifications)":
-        analysis_df = df.copy()
+        analysis_df = df_exploded.copy()
     else:
-        analysis_df = df[df['Classification'] == target_ipc]
+        analysis_df = df_exploded[df_exploded['Classification_Clean'] == target_ipc]
 
-    if analysis_df.empty:
-        st.error("No data found for this selection.")
-    else:
-        # Group by precision month
-        grouped = analysis_df.groupby(['Month_TS', 'Application Type (ID)']).size().reset_index(name='Monthly_Count')
-        pivot_df = grouped.pivot(index='Month_TS', columns='Application Type (ID)', values='Monthly_Count').fillna(0)
-        
-        # Fill Timeline Gaps
-        full_range = pd.date_range(start=df['Month_TS'].min(), end=df['Month_TS'].max(), freq='MS')
-        pivot_df = pivot_df.reindex(full_range, fill_value=0)
-        
-        # CALCULATE ROLLING TOTAL (Smoothes like an MA but uses Whole Numbers)
-        # This replaces the .mean() calculation to avoid 0.25 values
-        ma_df = pivot_df.rolling(window=12).sum().reset_index().rename(columns={'index': 'Timeline'})
-        
-        # Melt and Clean
-        melted = ma_df.melt(id_vars='Timeline', var_name='App Type', value_name='Total_Apps')
-        melted = melted.dropna()
+    grouped = analysis_df.groupby(['Priority_Month', 'Application Type (ID)']).size().reset_index(name='Counts')
+    pivot_df = grouped.pivot(index='Priority_Month', columns='Application Type (ID)', values='Counts').fillna(0)
+    
+    full_range = pd.date_range(start='2000-01-01', end='2025-12-01', freq='MS')
+    pivot_df = pivot_df.reindex(full_range, fill_value=0)
+    
+    ma_df = pivot_df.rolling(window=12).sum().reset_index().rename(columns={'index': 'Timeline'})
+    melted = ma_df.melt(id_vars='Timeline', var_name='App Type', value_name='Total_Apps')
 
-        # DYNAMIC START: Don't show empty years before the technology existed
-        active_data = melted[melted['Total_Apps'] > 0]
-        if not active_data.empty:
-            start_visible = active_data['Timeline'].min() - pd.DateOffset(years=1)
-            melted = melted[melted['Timeline'] >= start_visible]
+    fig_ma = px.line(melted, x='Timeline', y='Total_Apps', color='App Type',
+                     title=f"12-Month Growth Volume: {target_ipc}",
+                     labels={'Total_Apps': 'Number of Applications', 'Timeline': 'Year'},
+                     template='plotly_white')
+    fig_ma.update_xaxes(range=['2000-01-01', '2025-12-01'], dtick="M12", tickformat="%Y", showgrid=False)
+    fig_ma.update_yaxes(title="Number of Applications (TTM)", showgrid=True, gridcolor='whitesmoke')
+    st.plotly_chart(fig_ma, use_container_width=True)
 
-        # Create Plot
-        fig_ma = px.line(melted, x='Timeline', y='Total_Apps', color='App Type',
-                         title=f"12-Month Growth Volume: {target_ipc}",
-                         labels={'Total_Apps': 'Number of Applications', 'Timeline': 'Year'},
-                         template='plotly_white')
+# --- MODULE 3: WORKLOAD ANALYSIS ---
+elif menu == "Workload Analysis":
+    st.header("⚖️ Workload Analysis & Benchmarking")
+    st.write("Comparing arrival dates (Date of Arrival) against priority dates (Earliest Priority) using a Rolling 12-Month Total.")
 
-        # FINAL AXIS CUSTOMIZATION
-        fig_ma.update_xaxes(
-            dtick="M12", 
-            tickformat="%Y", 
-            showgrid=False, # No vertical lines
-            title="Year"
-        )
-        
-        fig_ma.update_yaxes(
-            title="Number of Applications (Rolling 12-Month Total)",
-            showgrid=True,
-            gridcolor='whitesmoke' # Faint horizontal lines only
-        )
-        
-        fig_ma.update_layout(hovermode='x unified')
-        st.plotly_chart(fig_ma, use_container_width=True)
+    # 1. Calculate Arrival Workload
+    arrival_workload = df_original.groupby('Arrival_Month').size().reset_index(name='Count')
+    arrival_workload = arrival_workload.set_index('Arrival_Month').reindex(
+        pd.date_range(start='2000-01-01', end='2025-12-01', freq='MS'), fill_value=0
+    ).rolling(window=12).sum().reset_index()
+    arrival_workload.columns = ['Date', 'Arrival Workload']
+
+    # 2. Calculate Priority Workload
+    priority_workload = df_original.groupby('Priority_Month').size().reset_index(name='Count')
+    priority_workload = priority_workload.set_index('Priority_Month').reindex(
+        pd.date_range(start='2000-01-01', end='2025-12-01', freq='MS'), fill_value=0
+    ).rolling(window=12).sum().reset_index()
+    priority_workload.columns = ['Date', 'Priority Workload']
+
+    # 3. Benchmark (0.2% of Total Records)
+    total_records = len(df_original)
+    benchmark_val = total_records * 0.002
+    
+    # 4. Merging for Plotting
+    workload_df = pd.merge(arrival_workload, priority_workload, on='Date')
+    workload_df['Benchmark (0.2%)'] = benchmark_val
+
+    # Plotting with Area Fills
+    fig_workload = go.Figure()
+
+    # Priority Workload (Shaded Area)
+    fig_workload.add_trace(go.Scatter(
+        x=workload_df['Date'], y=workload_df['Priority Workload'],
+        mode='lines', name='Earliest Priority Workload',
+        fill='tozeroy', line=dict(color='#002147', width=2),
+        fillcolor='rgba(0, 33, 71, 0.2)'
+    ))
+
+    # Arrival Workload (Shaded Area)
+    fig_workload.add_trace(go.Scatter(
+        x=workload_df['Date'], y=workload_df['Arrival Workload'],
+        mode='lines', name='Arrival Date Workload',
+        fill='tozeroy', line=dict(color='#FF6600', width=2),
+        fillcolor='rgba(255, 102, 0, 0.2)'
+    ))
+
+    # Benchmark Line
+    fig_workload.add_trace(go.Scatter(
+        x=workload_df['Date'], y=workload_df['Benchmark (0.2%)'],
+        mode='lines', name='0.2% Benchmark',
+        line=dict(color='red', width=2, dash='dash')
+    ))
+
+    fig_workload.update_layout(
+        title="Comparative Workload Analysis (TTM)",
+        xaxis_title="Year",
+        yaxis_title="Number of Applications",
+        template='plotly_white',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified"
+    )
+
+    fig_workload.update_xaxes(range=['2000-01-01', '2025-12-01'], dtick="M12", tickformat="%Y", showgrid=False)
+    fig_workload.update_yaxes(showgrid=True, gridcolor='whitesmoke')
+
+    st.plotly_chart(fig_workload, use_container_width=True)
+    st.info(f"The 0.2% Benchmark is set at **{benchmark_val:.2f}** applications per year.")
