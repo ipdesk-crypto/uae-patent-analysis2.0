@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import hmac
 from PIL import Image
 
-# --- ARCHISTRATEGOS SECURITY ---
+# --- SECURITY ---
 def check_password():
     def password_entered():
         if hmac.compare_digest(st.session_state["password"], "LeoGiannotti2026!"):
@@ -29,6 +28,7 @@ if not check_password():
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="UAE Patent Analysis 2.0", layout="wide", page_icon="🏛️")
 
+# Custom Styling
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #002147; color: white; }
@@ -36,24 +36,34 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- DATA REFINEMENT ENGINE ---
-def refine_data(df):
-    df.columns = df.columns.str.strip()
-    if 'Application Date' in df.columns:
-        df['Application Date'] = pd.to_datetime(df['Application Date'], errors='coerce')
-        df['Year'] = df['Application Date'].dt.year.fillna(0).astype(int)
-        df['Month'] = df['Application Date'].dt.month_name()
-        df['Period'] = df['Application Date'].dt.to_period('M').astype(str)
-        df['Date_Month'] = df['Application Date'].dt.to_period('M').dt.to_timestamp()
-    if 'Earliest Priority Date' in df.columns:
-        df['Earliest Priority Date'] = pd.to_datetime(df['Earliest Priority Date'], errors='coerce')
-        df['Priority_Year'] = df['Earliest Priority Date'].dt.year.fillna(0).astype(int)
-        df['Priority_Month'] = df['Earliest Priority Date'].dt.month_name()
-        df['Priority_Period'] = df['Earliest Priority Date'].dt.to_period('M').astype(str)
-    if 'Classification' in df.columns:
-        df['Primary_IPC'] = df['Classification'].astype(str).str.split(',').str[0].str.strip().str[:4]
-        df['IPC_Section'] = df['Primary_IPC'].str[:1].str.upper()
+# --- DATA ENGINE (EXPLODING CLASSIFICATIONS) ---
+@st.cache_data
+def load_and_refine_data():
+    raw_df = pd.read_csv("Data Structure - Patents in UAE (Archistrategos) - All available types.csv")
+    raw_df.columns = raw_df.columns.str.strip()
+    
+    # 1. Clean Dates
+    raw_df['Application Date'] = pd.to_datetime(raw_df['Application Date'], errors='coerce')
+    raw_df = raw_df.dropna(subset=['Application Date'])
+    raw_df['Year'] = raw_df['Application Date'].dt.year.astype(int)
+    raw_df['Month_Start'] = raw_df['Application Date'].dt.to_period('M').dt.to_timestamp()
+    
+    # 2. Explode Classifications (Treatment of multiple IPCs as separate entities)
+    # Split by comma and explode into separate rows
+    raw_df['Classification'] = raw_df['Classification'].astype(str).str.split(',')
+    df = raw_df.explode('Classification')
+    df['Classification'] = df['Classification'].str.strip()
+    
+    # Filter out rows with no valid classification
+    df = df[~df['Classification'].str.contains("no classification", case=False, na=False)]
+    df = df[df['Classification'] != 'nan']
+    
+    # Extract Section (A-H)
+    df['IPC_Section'] = df['Classification'].str[:1].str.upper()
+    
     return df
+
+df = load_and_refine_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -63,100 +73,81 @@ with st.sidebar:
     except:
         st.title("🏛️ ARCHISTRATEGOS")
     st.markdown("---")
-    data_source = st.radio("Select Data Source:", ["Default UAE Dataset", "Upload Custom CSV"])
+    menu = st.radio("Go to:", ["Classification Overview", "Growth Analysis (12-Month MA)"])
 
-try:
-    if data_source == "Upload Custom CSV":
-        uploaded_file = st.sidebar.file_uploader("Upload CSV", type="csv")
-        df = refine_data(pd.read_csv(uploaded_file)) if uploaded_file else None
+# --- MODULE 1: CLASSIFICATION OVERVIEW ---
+if menu == "Classification Overview":
+    st.header("📊 Classification Distribution (Individual IPC Counts)")
+    st.write("Each classification code in a row is counted as a separate instance.")
+    
+    valid_sections = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+    sect_df = df[df['IPC_Section'].isin(valid_sections)]
+    
+    # Section Distribution
+    section_counts = sect_df.groupby('IPC_Section').size().reset_index(name='Total Occurrences')
+    fig_sect = px.bar(section_counts, x='IPC_Section', y='Total Occurrences', text='Total Occurrences',
+                      title="Total Occurrences per IPC Section",
+                      color_discrete_sequence=['#FF6600'])
+    fig_sect.update_traces(textposition='outside')
+    st.plotly_chart(fig_sect, use_container_width=True)
+
+    # Yearly Growth of Sections
+    st.markdown("---")
+    st.subheader("Yearly IPC Section Trends")
+    yearly_sect = sect_df.groupby(['Year', 'IPC_Section']).size().reset_index(name='Occurrences')
+    fig_line = px.line(yearly_sect, x='Year', y='Occurrences', color='IPC_Section', markers=True,
+                       title="Growth of IPC Sections Over Time")
+    st.plotly_chart(fig_line, use_container_width=True)
+
+# --- MODULE 2: GROWTH ANALYSIS (MOVING AVERAGE) ---
+elif menu == "Growth Analysis (12-Month MA)":
+    st.header("📈 Growth Analysis: 12-Month Moving Average")
+    st.info("Note: If a patent contains multiple codes, it is counted once for each code it possesses.")
+
+    # Unique IPC List for Dropdown
+    all_codes = sorted(df['Classification'].unique())
+    target_ipc = st.selectbox("Select IPC Code to Zoom (or analyze total volume):", ["Total (All IPC Occurrences)"] + all_codes)
+
+    # Filtering
+    if target_ipc == "Total (All IPC Occurrences)":
+        analysis_df = df.copy()
     else:
-        # POINTING TO THE NEW FILENAME
-        df = refine_data(pd.read_csv("Data Structure - Patents in UAE (Archistrategos) - All available types.csv"))
-except:
-    st.error("Data Source Error.")
-    st.stop()
+        analysis_df = df[df['Classification'] == target_ipc]
 
-if df is not None:
-    menu = st.sidebar.radio("Go to:", ["Time-Series Growth", "Classification & Country Strength", "Global Priority & Comparisons", "Growth Analysis (MA)", "Expert Search"])
-    selected_country = st.sidebar.multiselect("Filter by Country", sorted(df['Country Name (Priority)'].dropna().unique()))
-    filtered_df = df.copy()
-    if selected_country:
-        filtered_df = filtered_df[filtered_df['Country Name (Priority)'].isin(selected_country)]
+    if analysis_df.empty:
+        st.warning("No data found for the selection.")
+    else:
+        # Group by Month and Application Type
+        grouped = analysis_df.groupby(['Month_Start', 'Application Type (ID)']).size().reset_index(name='Count')
+        
+        # Pivot for Moving Average
+        pivot_df = grouped.pivot(index='Month_Start', columns='Application Type (ID)', values='Count').fillna(0)
+        
+        # Ensure a continuous timeline (no gaps in months)
+        full_idx = pd.date_range(start=pivot_df.index.min(), end=pivot_df.index.max(), freq='MS')
+        pivot_df = pivot_df.reindex(full_idx, fill_value=0)
+        
+        # Calculate 12-Month Moving Average
+        ma_result = pivot_df.rolling(window=12).mean().reset_index()
+        ma_result = ma_result.rename(columns={'index': 'Month'})
+        
+        # Melt for visualization
+        melted = ma_result.melt(id_vars='Month', var_name='App Type ID', value_name='12-Month MA')
+        
+        # Remove NaN values from the beginning of the rolling window
+        melted = melted.dropna()
 
-    # --- MODULE 1: TIME-SERIES ---
-    if menu == "Time-Series Growth":
-        st.header("📈 Growth Trends & Temporal Analysis")
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.subheader("Total Applications per Year")
-            yearly_counts = filtered_df[filtered_df['Year'] >= 1990].groupby('Year').size().reset_index(name='Count')
-            fig_bar = px.bar(yearly_counts, x='Year', y='Count', text='Count', color_discrete_sequence=['#3498db'])
-            st.plotly_chart(fig_bar, use_container_width=True)
-        with col2:
-            st.subheader("Yearly Registry")
-            st.dataframe(yearly_counts.sort_values('Year', ascending=False), use_container_width=True, hide_index=True)
-
-        st.subheader("📉 Yearly Application Trend (Line View)")
-        fig_app_line = px.line(yearly_counts, x='Year', y='Count', markers=True)
-        st.plotly_chart(fig_app_line, use_container_width=True)
-
-    # --- MODULE 2: CLASSIFICATION ---
-    elif menu == "Classification & Country Strength":
-        st.header("🌍 IPC Strength & Country Activity")
-        ipc_sections = filtered_df[(filtered_df['IPC_Section'].str.isalpha()) & (filtered_df['IPC_Section'].str.len() == 1) & (filtered_df['IPC_Section'] != 'T')]
-        section_counts = ipc_sections.groupby('IPC_Section').size().reset_index(name='Count').sort_values('IPC_Section')
-        fig_ipc_hist = px.bar(section_counts, x='IPC_Section', y='Count', text='Count', color_discrete_sequence=['#f39c12'])
-        st.plotly_chart(fig_ipc_hist, use_container_width=True)
+        # Plot
+        fig_ma = px.line(melted, x='Month', y='12-Month MA', color='App Type ID',
+                         title=f"12-Month Moving Average Trend: {target_ipc}",
+                         labels={'12-Month MA': '12-Month MA', 'Month': 'Timeline (Yearly)'},
+                         template='plotly_white')
         
-        all_ipcs = [x for x in sorted(filtered_df['Primary_IPC'].dropna().unique()) if x != "Ther"]
-        target_ipc = st.selectbox("Detailed IPC Sector Analysis:", all_ipcs)
-        leader_counts = filtered_df[filtered_df['Primary_IPC'] == target_ipc].groupby('Country Name (Priority)').size().reset_index(name='Count').sort_values('Count', ascending=False)
-        st.plotly_chart(px.bar(leader_counts, x='Country Name (Priority)', y='Count', color_discrete_sequence=['#e74c3c']), use_container_width=True)
-
-    # --- MODULE 3: GLOBAL PRIORITY ---
-    elif menu == "Global Priority & Comparisons":
-        st.header("🏁 Global Priority Analysis")
-        valid_p = df[df['Priority_Year'] > 1900]['Priority_Year']
-        p_range = st.sidebar.slider("Select Priority Year Range", int(valid_p.min()), int(valid_p.max()), (int(valid_p.max()-5), int(valid_p.max())))
-        p_df = filtered_df[(filtered_df['Priority_Year'] >= p_range[0]) & (filtered_df['Priority_Year'] <= p_range[1])]
-        
-        actual = p_df.groupby(['Priority_Year', 'Priority_Month']).size().reset_index(name='Apps')
-        actual['Priority_Year'] = actual['Priority_Year'].astype(str)
-        st.plotly_chart(px.bar(actual, x='Priority_Month', y='Apps', color='Priority_Year', barmode='group'), use_container_width=True)
-
-    # --- MODULE 4: GROWTH ANALYSIS (MA) ---
-    elif menu == "Growth Analysis (MA)":
-        st.header("📈 12-Month Moving Average (Application Type Growth)")
-        
-        # All unique codes for zooming
-        all_codes = sorted(filtered_df['Classification'].str.split(',').explode().str.strip().unique())
-        ipc_zoom = st.selectbox("Zoom into specific IPC Code:", ["Total for all IPC"] + all_codes)
-        
-        ma_df = filtered_df.copy()
-        if ipc_zoom != "Total for all IPC":
-            ma_df = ma_df[ma_df['Classification'].str.contains(ipc_zoom, na=False, regex=False)]
-        
-        ma_df = ma_df[ma_df['Year'] > 0]
-        # Grouping by month and type
-        grouped = ma_df.groupby(['Date_Month', 'Application Type (ID)']).size().reset_index(name='Counts')
-        pivot_ma = grouped.pivot(index='Date_Month', columns='Application Type (ID)', values='Counts').fillna(0)
-        
-        # Ensure timeline is continuous for the Moving Average
-        full_idx = pd.date_range(start=pivot_ma.index.min(), end=pivot_ma.index.max(), freq='MS')
-        pivot_ma = pivot_ma.reindex(full_idx, fill_value=0)
-        
-        # Apply 12-month Rolling Mean
-        rolling_df = pivot_ma.rolling(window=12).mean().reset_index().rename(columns={'index': 'Month'})
-        melted = rolling_df.melt(id_vars='Month', var_name='App Type', value_name='Moving Average')
-        
-        fig_ma = px.line(melted, x='Month', y='Moving Average', color='App Type', 
-                         title=f"Trend for: {ipc_zoom}", template="plotly_white")
+        fig_ma.update_layout(
+            hovermode='x unified',
+            yaxis_title="12-Month MA",
+            xaxis_title="Year"
+        )
         st.plotly_chart(fig_ma, use_container_width=True)
-
-    # --- MODULE 5: EXPERT SEARCH ---
-    elif menu == "Expert Search":
-        st.header("🔍 Identify Experts")
-        search = st.text_input("Search Registry:")
-        if search:
-            mask = filtered_df.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
-            st.dataframe(filtered_df[mask][['Application Number', 'Classification', 'Country Name (Priority)', 'Application Date']], use_container_width=True, hide_index=True)
+        
+        st.write(f"This graph shows the smoothed growth of **{target_ipc}** across Application Types 1-5.")
