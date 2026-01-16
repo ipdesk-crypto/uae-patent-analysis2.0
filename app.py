@@ -34,7 +34,6 @@ st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #002147; color: white; }
     
-    /* Top Date Styling */
     .top-date {
         color: #FF6600;
         text-align: center;
@@ -44,7 +43,6 @@ st.markdown("""
         letter-spacing: 2px;
     }
 
-    /* Metric Card Styling */
     .metric-card {
         background-color: #002147;
         border-radius: 15px;
@@ -94,7 +92,7 @@ def load_all_data():
 
 df_exp, df_raw, latest_update_str = load_all_data()
 
-# --- 1. TOP DATE (STRICTLY DATE ONLY) ---
+# --- 1. TOP DATE ---
 st.markdown(f'<div class="top-date">{latest_update_str.upper()}</div>', unsafe_allow_html=True)
 
 # --- SIDEBAR NAVIGATION ---
@@ -105,11 +103,11 @@ with st.sidebar:
         st.title("🏛️ ARCHISTRATEGOS")
     
     st.markdown("---")
-    menu = st.radio("Navigation", ["Global Distribution", "Dynamic Growth Analysis"])
+    menu = st.radio("Navigation", ["All IPC Distribution", "Dynamic Growth Analysis"])
     
     if menu == "Dynamic Growth Analysis":
         st.markdown("### 🔍 IPC Navigation")
-        all_ipcs = ["GLOBAL TOTAL"] + sorted(df_exp['IPC_Clean'].unique())
+        all_ipcs = ["ALL IPC"] + sorted(df_exp['IPC_Clean'].unique())
         
         if "ipc_idx" not in st.session_state: 
             st.session_state.ipc_idx = 0
@@ -129,8 +127,8 @@ with st.sidebar:
         
         smooth_val = st.slider("Smoothing Window (Months):", 1, 24, 12)
 
-# --- MODULE 1: GLOBAL DISTRIBUTION ---
-if menu == "Global Distribution":
+# --- MODULE 1: ALL IPC DISTRIBUTION ---
+if menu == "All IPC Distribution":
     st.header("📊 Patent Landscape Distribution")
     c_a, c_b = st.columns(2)
     with c_a:
@@ -147,7 +145,7 @@ if menu == "Global Distribution":
 # --- MODULE 2: DYNAMIC GROWTH ANALYSIS ---
 elif menu == "Dynamic Growth Analysis":
     # Data Filtering
-    if target_ipc == "GLOBAL TOTAL":
+    if target_ipc == "ALL IPC":
         analysis_df = df_exp.copy()
         work_df = df_raw.copy()
     else:
@@ -213,7 +211,7 @@ elif menu == "Dynamic Growth Analysis":
         fig.add_trace(go.Scatter(x=type_ma.index, y=type_ma[col_name], mode='lines', name=f'Type: {col_name}',
                                  fill='tozeroy', line=dict(width=1.5), fillcolor=colors[i % len(colors)].replace('rgb', 'rgba').replace(')', ', 0.1)')))
 
-    # Benchmark Line
+    # Benchmark Line (0.2% of Total Dataset)
     benchmark_line = (len(df_raw) * 0.002) / 12
     fig.add_hline(y=benchmark_line, line_dash="dot", line_color="red", annotation_text="0.2% Threshold")
 
