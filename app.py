@@ -29,23 +29,45 @@ if not check_password():
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="UAE Patent Intelligence", layout="wide", page_icon="🏛️")
 
-# Custom UI Styling
+# Custom UI Styling for MAXIMUM VISIBILITY
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #002147; color: white; }
+    
+    /* Top Date Styling */
     .top-date {
         color: #FF6600;
         text-align: center;
-        font-weight: bold;
-        font-size: 2.5em;
-        margin-bottom: 10px;
-        font-family: serif;
+        font-weight: 800;
+        font-size: 3em;
+        margin-bottom: 5px;
+        letter-spacing: 2px;
     }
-    h1, h2, h3 { color: #002147; font-weight: bold; }
-    /* Force metrics to be high-contrast and visible */
-    [data-testid="stMetricValue"] { color: #002147 !important; font-size: 1.8rem !important; font-weight: bold !important; }
-    [data-testid="stMetricLabel"] { color: #444444 !important; font-size: 1.1rem !important; }
-    .metric-container { background-color: #f0f2f6; padding: 20px; border-radius: 10px; border: 1px solid #d1d1d1; }
+
+    /* Metric Card Styling */
+    .metric-card {
+        background-color: #002147;
+        border-radius: 15px;
+        padding: 25px;
+        text-align: center;
+        border-bottom: 6px solid #FF6600;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    .metric-label {
+        color: #FF6600;
+        font-size: 1.1em;
+        font-weight: bold;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+    .metric-value {
+        color: #ffffff;
+        font-size: 2.5em;
+        font-weight: 900;
+        font-family: 'Courier New', Courier, monospace;
+    }
+    
+    h2, h3 { color: #002147; font-weight: 800; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +94,7 @@ def load_all_data():
 
 df_exp, df_raw, latest_update_str = load_all_data()
 
-# --- TOP DATE ---
+# --- 1. TOP DATE (STRICTLY DATE ONLY) ---
 st.markdown(f'<div class="top-date">{latest_update_str.upper()}</div>', unsafe_allow_html=True)
 
 # --- SIDEBAR NAVIGATION ---
@@ -83,51 +105,48 @@ with st.sidebar:
         st.title("🏛️ ARCHISTRATEGOS")
     
     st.markdown("---")
-    menu = st.radio("Navigation", ["Landscape Distribution", "Dynamic Growth Analysis"])
+    menu = st.radio("Navigation", ["Global Distribution", "Dynamic Growth Analysis"])
     
     if menu == "Dynamic Growth Analysis":
-        st.markdown("### 🔍 IPC Search & Step")
+        st.markdown("### 🔍 IPC Navigation")
         all_ipcs = ["GLOBAL TOTAL"] + sorted(df_exp['IPC_Clean'].unique())
-        if "ipc_idx" not in st.session_state: st.session_state.ipc_idx = 0
         
-        target_ipc = st.selectbox("Search IPC:", all_ipcs, index=st.session_state.ipc_idx)
+        if "ipc_idx" not in st.session_state: 
+            st.session_state.ipc_idx = 0
+        
+        target_ipc = st.selectbox("Search/Select IPC:", all_ipcs, index=st.session_state.ipc_idx)
         st.session_state.ipc_idx = all_ipcs.index(target_ipc)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("← Previous"): 
+        col_prev, col_next = st.columns(2)
+        with col_prev:
+            if st.button("← PREVIOUS"): 
                 st.session_state.ipc_idx = (st.session_state.ipc_idx - 1) % len(all_ipcs)
                 st.rerun()
-        with c2:
-            if st.button("Next →"): 
+        with col_next:
+            if st.button("NEXT →"): 
                 st.session_state.ipc_idx = (st.session_state.ipc_idx + 1) % len(all_ipcs)
                 st.rerun()
         
-        smooth_val = st.slider("Smoothing (Months):", 1, 24, 12)
+        smooth_val = st.slider("Smoothing Window (Months):", 1, 24, 12)
 
-# --- MODULE 1: LANDSCAPE DISTRIBUTION ---
-if menu == "Landscape Distribution":
-    st.header("📊 Global Distribution (IPC A-H)")
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
+# --- MODULE 1: GLOBAL DISTRIBUTION ---
+if menu == "Global Distribution":
+    st.header("📊 Patent Landscape Distribution")
+    c_a, c_b = st.columns(2)
+    with c_a:
         sect_counts = df_exp.groupby('IPC_Section').size().reset_index(name='Apps')
-        fig1 = px.bar(sect_counts, x='IPC_Section', y='Apps', text='Apps', 
-                      color_discrete_sequence=['#FF6600'], title="Volume by Section")
+        fig1 = px.bar(sect_counts, x='IPC_Section', y='Apps', text='Apps', color_discrete_sequence=['#FF6600'], title="Total Apps by Section")
         st.plotly_chart(fig1, use_container_width=True)
-        
-    with col_b:
+    with c_b:
         df_exp['Year'] = df_exp['Earliest Priority Date'].dt.year
         yearly_sect = df_exp.groupby(['Year', 'IPC_Section']).size().reset_index(name='Apps')
-        fig2 = px.line(yearly_sect, x='Year', y='Apps', color='IPC_Section', title="Yearly Section Growth")
+        fig2 = px.line(yearly_sect, x='Year', y='Apps', color='IPC_Section', title="Yearly Section Growth (A-H)")
         fig2.update_xaxes(range=[2000, 2025])
         st.plotly_chart(fig2, use_container_width=True)
 
 # --- MODULE 2: DYNAMIC GROWTH ANALYSIS ---
 elif menu == "Dynamic Growth Analysis":
-    st.header(f"📈 Growth Engine: {target_ipc}")
-
-    # Filtering
+    # Data Filtering
     if target_ipc == "GLOBAL TOTAL":
         analysis_df = df_exp.copy()
         work_df = df_raw.copy()
@@ -145,25 +164,42 @@ elif menu == "Dynamic Growth Analysis":
     pri_ma = get_ma(work_df, 'Priority_Month', smooth_val)
     arr_ma = get_ma(work_df, 'Arrival_Month', smooth_val)
     
-    # Stats Calculation
-    inception_date = pri_ma[pri_ma['N'] > 0]['index'].min()
+    # Statistics
+    inception_dt = pri_ma[pri_ma['N'] > 0]['index'].min()
     peak_val = pri_ma['N'].max()
+    inception_str = inception_dt.strftime('%Y-%m') if pd.notnull(inception_dt) else "N/A"
+
+    # --- HIGH VISIBILITY METRIC CARDS ---
+    st.write("---")
+    m_col1, m_col2, m_col3 = st.columns(3)
     
-    # --- METRIC BOXES (VISIBLE) ---
-    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Inception Date", inception_date.strftime('%Y-%m') if pd.notnull(inception_date) else "N/A")
-    m2.metric("Peak Moving Avg", f"{peak_val:.2f}")
-    m3.metric("Total Applications", len(work_df))
-    st.markdown("</div>", unsafe_allow_html=True)
+    with m_col1:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-label">Inception Date</div>
+            <div class="metric-value">{inception_str}</div>
+        </div>""", unsafe_allow_html=True)
+        
+    with m_col2:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-label">Peak Moving Avg</div>
+            <div class="metric-value">{peak_val:.2f}</div>
+        </div>""", unsafe_allow_html=True)
+        
+    with m_col3:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-label">Total Applications</div>
+            <div class="metric-value">{len(work_df)}</div>
+        </div>""", unsafe_allow_html=True)
     st.write("---")
 
-    # --- THE MAIN CHART ---
+    # --- THE GRAPH ---
     fig = go.Figure()
-    # Priority Shading
-    fig.add_trace(go.Scatter(x=pri_ma['index'], y=pri_ma['N'], mode='lines', name='Priority Trend',
-                             fill='tozeroy', line=dict(color='#002147', width=4), fillcolor='rgba(0, 33, 71, 0.2)'))
-    # Arrival Shading
+    
+    # Priority Trend
+    fig.add_trace(go.Scatter(x=pri_ma['index'], y=pri_ma['N'], mode='lines', name='Growth (Priority)',
+                             fill='tozeroy', line=dict(color='#002147', width=5), fillcolor='rgba(0, 33, 71, 0.25)'))
+    
+    # Arrival Trend
     fig.add_trace(go.Scatter(x=arr_ma['index'], y=arr_ma['N'], mode='lines', name='Arrival Workload',
                              fill='tozeroy', line=dict(color='#FF6600', width=2), fillcolor='rgba(255, 102, 0, 0.1)'))
 
@@ -172,20 +208,17 @@ elif menu == "Dynamic Growth Analysis":
                  .pivot(index='Priority_Month', columns='Application Type (ID)', values='N').fillna(0)
     type_ma = type_pivot.reindex(full_range, fill_value=0).rolling(window=smooth_val).mean()
     
-    palette = px.colors.qualitative.Safe
-    for i, col in enumerate(type_ma.columns):
-        fig.add_trace(go.Scatter(x=type_ma.index, y=type_ma[col], mode='lines', name=f'Type: {col}',
-                                 fill='tozeroy', line=dict(width=1.5), fillcolor=palette[i % len(palette)].replace('rgb', 'rgba').replace(')', ', 0.1)')))
+    colors = px.colors.qualitative.Bold
+    for i, col_name in enumerate(type_ma.columns):
+        fig.add_trace(go.Scatter(x=type_ma.index, y=type_ma[col_name], mode='lines', name=f'Type: {col_name}',
+                                 fill='tozeroy', line=dict(width=1.5), fillcolor=colors[i % len(colors)].replace('rgb', 'rgba').replace(')', ', 0.1)')))
 
-    # Benchmarks & Inception
-    if pd.notnull(inception_date):
-        fig.add_vline(x=inception_date, line_width=2, line_dash="dash", line_color="green")
-    
-    benchmark = (len(df_raw) * 0.002) / 12
-    fig.add_hline(y=benchmark, line_dash="dot", line_color="red", annotation_text="0.2% Threshold")
+    # Benchmark Line
+    benchmark_line = (len(df_raw) * 0.002) / 12
+    fig.add_hline(y=benchmark_line, line_dash="dot", line_color="red", annotation_text="0.2% Threshold")
 
-    fig.update_layout(height=600, template='plotly_white', hovermode="x unified",
-                      xaxis_title="Timeline 2000-2025", yaxis_title="Number of Apps (Moving Avg)",
+    fig.update_layout(title=f"Trend Analytics: {target_ipc}", height=600, template='plotly_white', hovermode="x unified",
+                      xaxis_title="Timeline", yaxis_title="Applications (Moving Average)",
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     fig.update_xaxes(range=['2000-01-01', '2025-12-01'], dtick="M12", tickformat="%Y", showgrid=False)
     
