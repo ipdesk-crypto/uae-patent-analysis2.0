@@ -27,171 +27,153 @@ if not check_password():
     st.stop()
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="UAE Patent Intelligence 2.0", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="UAE Patent Intelligence", layout="wide", page_icon="🏛️")
 
 # Custom UI Styling
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #002147; color: white; }
-    h1, h2, h3 { color: #002147; font-family: 'Arial Black', sans-serif; }
-    .header-banner { 
-        background-color: #002147; padding: 20px; border-radius: 10px; text-align: center; 
-        border-bottom: 5px solid #FF6600; margin-bottom: 25px;
+    .latest-update-banner {
+        background-color: #FF6600;
+        color: white;
+        padding: 10px;
+        text-align: center;
+        font-weight: bold;
+        border-radius: 5px;
+        margin-bottom: 20px;
+        font-size: 1.2em;
     }
-    .metric-card {
-        background-color: #f0f2f6; border-radius: 10px; padding: 15px; border-left: 5px solid #002147;
-    }
+    h1, h2, h3 { color: #002147; }
     </style>
 """, unsafe_allow_html=True)
 
 # --- DATA PROCESSING ENGINE ---
 @st.cache_data
-def load_and_prepare_data():
+def load_data():
     file_path = "Data Structure - Patents in UAE (Archistrategos) - All available types.csv"
-    df_raw = pd.read_csv(file_path)
-    df_raw.columns = df_raw.columns.str.strip()
+    df = pd.read_csv(file_path)
+    df.columns = df.columns.str.strip()
     
-    # Date Standardization
-    df_raw['Earliest Priority Date'] = pd.to_datetime(df_raw['Earliest Priority Date'], errors='coerce')
-    df_raw['Application Date'] = pd.to_datetime(df_raw['Application Date'], errors='coerce')
-    df_raw = df_raw.dropna(subset=['Earliest Priority Date', 'Application Date'])
+    # Clean Dates
+    df['Earliest Priority Date'] = pd.to_datetime(df['Earliest Priority Date'], errors='coerce')
+    df['Application Date'] = pd.to_datetime(df['Application Date'], errors='coerce')
+    df = df.dropna(subset=['Earliest Priority Date', 'Application Date'])
     
-    # Monthly Timestamps
-    df_raw['Priority_Month'] = df_raw['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
-    df_raw['Arrival_Month'] = df_raw['Application Date'].dt.to_period('M').dt.to_timestamp()
+    # Monthly Buckets
+    df['Priority_Month'] = df['Earliest Priority Date'].dt.to_period('M').dt.to_timestamp()
+    df['Arrival_Month'] = df['Application Date'].dt.to_period('M').dt.to_timestamp()
     
     # Metadata
-    most_recent_str = df_raw['Application Date'].max().strftime('%B %d, %Y')
+    latest_date = df['Application Date'].max().strftime('%B %d, %Y')
     
-    # IPC Explode
-    df_raw['IPC_List'] = df_raw['Classification'].astype(str).str.split(',')
-    df_exploded = df_raw.explode('IPC_List')
-    df_exploded['IPC_Clean'] = df_exploded['IPC_List'].str.strip()
-    df_exploded = df_exploded[~df_exploded['IPC_Clean'].str.contains("no classification|nan", case=False, na=False)]
-    df_exploded['IPC_Section'] = df_exploded['IPC_Clean'].str[:1].str.upper()
+    # IPC Explosion
+    df['IPC_List'] = df['Classification'].astype(str).str.split(',')
+    df_exp = df.explode('IPC_List')
+    df_exp['IPC_Clean'] = df_exp['IPC_List'].str.strip()
+    df_exp = df_exp[~df_exp['IPC_Clean'].str.contains("no classification|nan", case=False, na=False)]
     
-    return df_exploded, df_raw, most_recent_str
+    return df_exp, df, latest_date
 
-df_exploded, df_raw, most_recent_label = load_and_prepare_data()
+df_exp, df_raw, latest_update_str = load_data()
 
-# --- HEADER ---
-st.markdown(f"""
-    <div class="header-banner">
-        <h2 style="color: white; margin: 0;">🏛️ ARCHISTRATEGOS PATENT INTELLIGENCE</h2>
-        <h4 style="color: #FF6600; margin: 5px 0 0 0;">LATEST RECORDED DATA: {most_recent_label.upper()}</h4>
-    </div>
-""", unsafe_allow_html=True)
+# --- 1. LATEST RECORDED DATE (TOP PRIORITY) ---
+st.markdown(f'<div class="latest-update-banner">DATABASE UPDATED UNTIL: {latest_update_str.upper()}</div>', unsafe_allow_html=True)
+
+st.title("🏛️ Archistrategos: Patent Growth Analytics")
 
 # --- SIDEBAR ---
 with st.sidebar:
     try:
         st.image("logo.jpeg", use_container_width=True)
     except:
-        st.title("🏛️ ARCHISTRATEGOS")
-    
-    st.markdown("### ⚙️ Analysis Controls")
-    smoothing_window = st.slider("Moving Average Window (Months):", 1, 24, 12, help="Higher values show smoother trends.")
-    
+        pass
+    st.markdown("### 🛠️ Graph Controls")
+    smooth_val = st.slider("Smoothing (Moving Average Window):", 1, 24, 12, help="Adjust to see long-term growth trends vs monthly noise.")
     st.markdown("---")
-    menu = st.radio("Navigation", ["Overview Distribution", "Dynamic Growth Engine"])
+    all_ipcs = sorted(df_exp['IPC_Clean'].unique())
+    target_ipc = st.selectbox("Target IPC Classification:", ["GLOBAL TOTAL"] + all_ipcs)
 
-# --- MODULE 1: OVERVIEW ---
-if menu == "Overview Distribution":
-    st.header("📊 Patent Landscape (2000-2025)")
-    sect_counts = df_exploded.groupby('IPC_Section').size().reset_index(name='Apps')
-    fig_bar = px.bar(sect_counts, x='IPC_Section', y='Apps', text='Apps', 
-                     color_discrete_sequence=['#FF6600'], title="Volume by IPC Section")
-    fig_bar.update_layout(xaxis_showgrid=False, template='plotly_white')
-    st.plotly_chart(fig_bar, use_container_width=True)
+# --- FILTERING ---
+if target_ipc == "GLOBAL TOTAL":
+    analysis_df = df_exp.copy()
+    work_df = df_raw.copy()
+else:
+    analysis_df = df_exp[df_exp['IPC_Clean'] == target_ipc]
+    u_ids = analysis_df['Application Number'].unique()
+    work_df = df_raw[df_raw['Application Number'].isin(u_ids)]
 
-# --- MODULE 2: DYNAMIC GROWTH ENGINE ---
-elif menu == "Dynamic Growth Engine":
-    st.header("📈 Moving Average & Growth Inception")
-    
-    all_codes = sorted(df_exploded['IPC_Clean'].unique())
-    target_ipc = st.selectbox("Select Technology (IPC) to Analyze Lifecycle:", ["TOTAL (Global)"] + all_codes)
+# --- MATH: MOVING AVERAGE ---
+full_range = pd.date_range(start='2000-01-01', end='2025-12-01', freq='MS')
 
-    # Filtering
-    if target_ipc == "TOTAL (Global)":
-        type_df = df_exploded.copy()
-        work_df = df_raw.copy()
-    else:
-        type_df = df_exploded[df_exploded['IPC_Clean'] == target_ipc]
-        u_ids = type_df['Application Number'].unique()
-        work_df = df_raw[df_raw['Application Number'].isin(u_ids)]
+def get_ma(data, date_col, window):
+    counts = data.groupby(date_col).size().reset_index(name='N')
+    return counts.set_index(date_col).reindex(full_range, fill_value=0).rolling(window=window).mean().reset_index()
 
-    # Analysis Timeframe
-    full_range = pd.date_range(start='2000-01-01', end='2025-12-01', freq='MS')
-    benchmark_val = (len(df_raw) * 0.002) # Global Volume Benchmark
+pri_ma = get_ma(work_df, 'Priority_Month', smooth_val)
+arr_ma = get_ma(work_df, 'Arrival_Month', smooth_val)
 
-    # TTM / Moving Average Logic
-    def get_moving_avg(df_in, date_col, window):
-        c = df_in.groupby(date_col).size().reset_index(name='N')
-        # We use .sum() to show 'Annualized Rate' (Standard for growth)
-        return c.set_index(date_col).reindex(full_range, fill_value=0).rolling(window=window).sum().reset_index()
+# App Types Pivot
+type_pivot = analysis_df.groupby(['Priority_Month', 'Application Type (ID)']).size().reset_index(name='N') \
+             .pivot(index='Priority_Month', columns='Application Type (ID)', values='N').fillna(0)
+type_ma = type_pivot.reindex(full_range, fill_value=0).rolling(window=smooth_val).mean()
 
-    arr_ma = get_moving_avg(work_df, 'Arrival_Month', smoothing_window)
-    pri_ma = get_moving_avg(work_df, 'Priority_Month', smoothing_window)
-    
-    type_pivot = type_df.groupby(['Priority_Month', 'Application Type (ID)']).size().reset_index(name='N') \
-                 .pivot(index='Priority_Month', columns='Application Type (ID)', values='N').fillna(0)
-    type_ma = type_pivot.reindex(full_range, fill_value=0).rolling(window=smoothing_window).sum()
+# Growth Statistics
+inception_date = pri_ma[pri_ma['N'] > 0]['index'].min()
+peak_row = pri_ma.loc[pri_ma['N'].idxmax()] if not pri_ma['N'].empty else None
 
-    # Growth Inception logic: Find first date where total > 0
-    inception_date = pri_ma[pri_ma['N'] > 0]['index'].min()
-    peak_val = pri_ma['N'].max()
-    peak_date = pri_ma[pri_ma['N'] == peak_val]['index'].iloc[0] if peak_val > 0 else None
+# --- 2. KPI METRICS (VISIBLE) ---
+st.subheader(f"Lifecycle Summary: {target_ipc}")
+m1, m2, m3 = st.columns(3)
+m1.metric("Inception Date", inception_date.strftime('%Y-%m') if pd.notnull(inception_date) else "N/A")
+m2.metric("Peak Moving Avg", f"{peak_row['N']:.2f}" if peak_row is not None else "0.00")
+m3.metric("Total Applications", len(work_df))
 
-    # KPI Row
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"<div class='metric-card'><b>Inception Date</b><br><span style='font-size:24px; color:#FF6600;'>{inception_date.strftime('%Y-%m') if pd.notnull(inception_date) else 'N/A'}</span></div>", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"<div class='metric-card'><b>Peak Volume</b><br><span style='font-size:24px; color:#002147;'>{int(peak_val)} Apps / Year</span></div>", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"<div class='metric-card'><b>Total Lifecycle Apps</b><br><span style='font-size:24px; color:#002147;'>{len(work_df)}</span></div>", unsafe_allow_html=True)
+# --- 3. THE GRAPH ---
+fig = go.Figure()
 
-    # --- MAIN CHART ---
-    fig = go.Figure()
+# Priority Trend (Main Growth)
+fig.add_trace(go.Scatter(
+    x=pri_ma['index'], y=pri_ma['N'], mode='lines', name='Growth Trend (Priority)',
+    fill='tozeroy', line=dict(color='#002147', width=4), fillcolor='rgba(0, 33, 71, 0.2)'
+))
 
-    # Workload: Priority (Primary Growth Indicator)
+# Arrival Workload
+fig.add_trace(go.Scatter(
+    x=arr_ma['index'], y=arr_ma['N'], mode='lines', name='Arrival Workload',
+    fill='tozeroy', line=dict(color='#FF6600', width=2), fillcolor='rgba(255, 102, 0, 0.1)'
+))
+
+# Specific Application Types
+palette = px.colors.qualitative.Safe
+for i, col in enumerate(type_ma.columns):
+    c = palette[i % len(palette)]
+    rgba = c.replace('rgb', 'rgba').replace(')', ', 0.15)')
     fig.add_trace(go.Scatter(
-        x=pri_ma['index'], y=pri_ma['N'], mode='lines', name='Growth Trend (Priority)',
-        fill='tozeroy', line=dict(color='#002147', width=4), fillcolor='rgba(0, 33, 71, 0.2)'
+        x=type_ma.index, y=type_ma[col], mode='lines', name=f'App Type: {col}',
+        fill='tozeroy', line=dict(width=1.5), fillcolor=rgba
     ))
 
-    # Workload: Arrival (Shaded)
-    fig.add_trace(go.Scatter(
-        x=arr_ma['index'], y=arr_ma['N'], mode='lines', name='Arrival Workload',
-        fill='tozeroy', line=dict(color='#FF6600', width=2), fillcolor='rgba(255, 102, 0, 0.1)'
-    ))
+# Growth Inception Marker
+if pd.notnull(inception_date):
+    fig.add_vline(x=inception_date, line_width=2, line_dash="dash", line_color="green")
+    fig.add_annotation(x=inception_date, y=pri_ma['N'].max(), text="GROWTH START", showarrow=True, font=dict(color="green"))
 
-    # Application Types (Shaded)
-    palette = px.colors.qualitative.Prism
-    for i, col in enumerate(type_ma.columns):
-        color = palette[i % len(palette)]
-        rgba = color.replace('rgb', 'rgba').replace(')', ', 0.1)') if 'rgb' in color else color
-        fig.add_trace(go.Scatter(
-            x=type_ma.index, y=type_ma[col], mode='lines', name=f'Type: {col}',
-            fill='tozeroy', line=dict(width=1), fillcolor=rgba
-        ))
+# Global Benchmark (0.2%)
+benchmark = len(df_raw) * 0.002 / 12 # Monthly average benchmark
+fig.add_hline(y=benchmark, line_dash="dot", line_color="red", annotation_text="0.2% Volume Threshold")
 
-    # GROWTH INCEPTION MARKER
-    if pd.notnull(inception_date):
-        fig.add_vline(x=inception_date, line_width=2, line_dash="dot", line_color="green")
-        fig.add_annotation(x=inception_date, y=peak_val*0.9, text="GROWTH START", showarrow=True, arrowhead=1, font=dict(color="green"))
+fig.update_layout(
+    title=f"Moving Average Growth Analysis ({smooth_val} Months Window)",
+    xaxis_title="Timeline (2000 - 2025)",
+    yaxis_title="Moving Average (Monthly Apps)",
+    hovermode="x unified",
+    template='plotly_white',
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
 
-    # BENCHMARK
-    fig.add_trace(go.Scatter(x=full_range, y=[benchmark_val]*len(full_range), mode='lines', 
-                             name='0.2% Volume Threshold', line=dict(color='red', width=2, dash='dash')))
+fig.update_xaxes(range=['2000-01-01', '2025-12-01'], dtick="M12", tickformat="%Y", showgrid=False)
+fig.update_yaxes(showgrid=True, gridcolor='whitesmoke')
 
-    fig.update_layout(
-        title=f"Lifecycle Analysis: {target_ipc} ({smoothing_window}-Month Moving Average)",
-        xaxis_title="Timeline", yaxis_title="Annualized Application Rate",
-        hovermode="x unified", template='plotly_white',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    fig.update_xaxes(range=['2000-01-01', '2025-12-01'], dtick="M12", tickformat="%Y", showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor='whitesmoke')
+st.plotly_chart(fig, use_container_width=True)
 
-    st.plotly_chart(fig, use_container_width=True)
+st.caption("The graph uses a Moving Average to show consistent growth. 'Growth Start' indicates the first sustained activity for this IPC.")
