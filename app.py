@@ -13,8 +13,10 @@ def check_password():
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
+            
     if st.session_state.get("password_correct", False):
         return True
+        
     st.markdown("<h1 style='text-align: center; color: #FF6600;'>🏛️ ARCHISTRATEGOS 9.0</h1>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
@@ -54,8 +56,14 @@ st.markdown("""
 # --- DATA ENGINE ---
 @st.cache_data
 def load_and_preprocess():
+    # Update this filename to match your exact file
     file_path = "2026 - 01- 23_ Data Structure for Patent Search and Analysis Engine - Type 5.csv"
-    df = pd.read_csv(file_path)
+    try:
+        df = pd.read_csv(file_path)
+    except FileNotFoundError:
+        st.error(f"File not found: {file_path}")
+        st.stop()
+
     df = df[df['Application Number'] != 'Raw'].copy()
     
     df['AppDate'] = pd.to_datetime(df['Application Date'], errors='coerce')
@@ -101,8 +109,6 @@ with tabs[0]:
     st.header("Application Type Time-Series")
     growth = df_f.groupby(['Year', 'Application Type (ID)']).size().reset_index(name='Count')
     st.plotly_chart(px.line(growth, x='Year', y='Count', color='Application Type (ID)', markers=True, height=750), use_container_width=True)
-    st.subheader("Summary Table")
-    st.dataframe(growth.pivot(index='Year', columns='Application Type (ID)', values='Count').fillna(0), use_container_width=True)
 
 # 2. FIRM INTELLIGENCE
 with tabs[1]:
@@ -112,8 +118,6 @@ with tabs[1]:
     if selected_firms:
         firm_growth = df_f[df_f['Firm'].isin(selected_firms)].groupby(['Year', 'Firm']).size().reset_index(name='Apps')
         st.plotly_chart(px.line(firm_growth, x='Year', y='Apps', color='Firm', markers=True, height=800), use_container_width=True)
-        st.subheader("Leaderboard")
-        st.dataframe(df_f.groupby('Firm').size().reset_index(name='Total Apps').sort_values('Total Apps', ascending=False), use_container_width=True, hide_index=True)
 
 # 3. FIRM TECH-STRENGTHS
 with tabs[2]:
@@ -121,35 +125,27 @@ with tabs[2]:
     if selected_firms:
         firm_ipc = df_exp_f[df_exp_f['Firm'].isin(selected_firms)].groupby(['Firm', 'IPC_Class3']).size().reset_index(name='Count')
         st.plotly_chart(px.bar(firm_ipc, x='Count', y='Firm', color='IPC_Class3', orientation='h', height=850), use_container_width=True)
-        st.subheader("Tech Summary")
-        st.dataframe(firm_ipc.pivot(index='Firm', columns='IPC_Class3', values='Count').fillna(0), use_container_width=True)
 
 # 4. STRATEGIC MAP
 with tabs[3]:
     st.header("🎯 Strategic Innovation & Competitor Map")
     land_data = df_exp_f.groupby(['IPC_Section', 'IPC_Class3']).agg({'Application Number':'count', 'Firm':'nunique'}).reset_index()
     st.plotly_chart(px.scatter(land_data, x='IPC_Section', y='IPC_Class3', size='Application Number', color='Firm', height=850, color_continuous_scale='Viridis'), use_container_width=True)
-    st.subheader("Industry Summary")
-    st.dataframe(land_data.sort_values(by='Application Number', ascending=False), use_container_width=True, hide_index=True)
 
 # 5. IPC CLASSIFICATION
 with tabs[4]:
     st.header("IPC Section Distribution (A-H)")
     ipc_counts = df_exp_f.groupby('IPC_Section').size().reset_index(name='Count').sort_values('IPC_Section')
     st.plotly_chart(px.bar(ipc_counts, x='IPC_Section', y='Count', color='IPC_Section', text='Count', height=800), use_container_width=True)
-    st.subheader("IPC Summary")
-    st.dataframe(ipc_counts, use_container_width=True, hide_index=True)
 
-# 6. DYNAMIC MOVING AVERAGES (FULLY RECONSTRUCTED TO MATCH REQUEST)
+# 6. DYNAMIC MOVING AVERAGES (STACKED MULTILAYERED VERSION)
 with tabs[5]:
     st.header("📉 Dynamic Growth Analysis")
     
-    # Selection Controls
     all_ipcs = ["ALL IPC"] + sorted(df_exp_f['IPC_Clean'].unique())
     target_ipc = st.selectbox("Search/Select IPC:", all_ipcs)
     smooth_val = st.slider("Smoothing Window (Months):", 1, 24, 12)
 
-    # Filtering
     if target_ipc == "ALL IPC":
         analysis_df = df_exp_f.copy()
         work_df = df_f.copy()
@@ -158,8 +154,7 @@ with tabs[5]:
         u_ids = analysis_df['Application Number'].unique()
         work_df = df_f[df_f['Application Number'].isin(u_ids)]
 
-    # Timeframe Range
-    full_range = pd.date_range(start='2000-01-01', end=df_f['AppDate'].max(), freq='MS')
+    full_range = pd.date_range(start='2010-01-01', end=df_f['AppDate'].max(), freq='MS')
 
     def get_ma_series(data, date_col, window):
         c = data.groupby(date_col).size().reset_index(name='N')
@@ -168,45 +163,54 @@ with tabs[5]:
     pri_ma = get_ma_series(work_df, 'Priority_Month', smooth_val)
     arr_ma = get_ma_series(work_df, 'Arrival_Month', smooth_val)
     
-    # METRIC CARDS
     st.write("---")
     m1, m2, m3 = st.columns(3)
     inc_dt = pri_ma[pri_ma['N'] > 0]['index'].min()
-    with m1: st.markdown(f'<div class="metric-card"><div class="metric-label">Inception</div><div class="metric-value">{inc_dt.strftime("%Y-%m") if pd.notnull(inc_dt) else "N/A"}</div></div>', unsafe_allow_html=True)
+    with m1: st.markdown(f'<div class="metric-card"><div class="metric-label">Inception</div><div class="metric-value">{inc_dt.strftime("%Y") if pd.notnull(inc_dt) else "N/A"}</div></div>', unsafe_allow_html=True)
     with m2: st.markdown(f'<div class="metric-card"><div class="metric-label">Peak MA</div><div class="metric-value">{pri_ma["N"].max():.2f}</div></div>', unsafe_allow_html=True)
     with m3: st.markdown(f'<div class="metric-card"><div class="metric-label">Total Volume</div><div class="metric-value">{len(work_df)}</div></div>', unsafe_allow_html=True)
 
-    # GRAPH CONSTRUCTION
+    # --- MULTILAYERED GRAPH CONSTRUCTION ---
     fig = go.Figure()
     
-    # 1. Growth Priority (Filled)
-    fig.add_trace(go.Scatter(x=pri_ma['index'], y=pri_ma['N'], mode='lines', name='Growth (Priority)',
-                             fill='tozeroy', line=dict(color='#002147', width=5), fillcolor='rgba(0, 33, 71, 0.2)'))
-    
-    # 2. Arrival Workload (Filled)
-    fig.add_trace(go.Scatter(x=arr_ma['index'], y=arr_ma['N'], mode='lines', name='Arrival Workload',
-                             fill='tozeroy', line=dict(color='#FF6600', width=2), fillcolor='rgba(255, 102, 0, 0.1)'))
-
-    # 3. Type Breakdown Lines
+    # 1. Type Breakdown (Layered / Stacked Area)
     type_pivot = analysis_df.groupby(['Priority_Month', 'Application Type (ID)']).size().reset_index(name='N') \
                  .pivot(index='Priority_Month', columns='Application Type (ID)', values='N').fillna(0)
     type_ma = type_pivot.reindex(full_range, fill_value=0).rolling(window=smooth_val).mean()
     
-    colors = px.colors.qualitative.Prism
-    for i, col_name in enumerate(type_ma.columns):
-        fig.add_trace(go.Scatter(x=type_ma.index, y=type_ma[col_name], mode='lines', name=f'Type: {col_name}',
-                                 line=dict(width=1.5), fill='none'))
+    for col_name in type_ma.columns:
+        fig.add_trace(go.Scatter(
+            x=type_ma.index, 
+            y=type_ma[col_name], 
+            mode='lines', 
+            name=f'Type: {col_name}',
+            stackgroup='one',  # This creates the "multilayered" effect
+            line=dict(width=0.5),
+            hoverinfo='x+y+name'
+        ))
 
-    # 4. Benchmark Line
+    # 2. Arrival Workload (Overlay Line - Not stacked, to show difference)
+    fig.add_trace(go.Scatter(
+        x=arr_ma['index'], 
+        y=arr_ma['N'], 
+        mode='lines', 
+        name='Arrival Workload (Total)',
+        line=dict(color='#FF6600', width=3, dash='dot'),
+        stackgroup=None # Keep this as a separate line
+    ))
+
+    # 3. Benchmark
     benchmark = (len(df_main) * 0.002) / 12
-    fig.add_hline(y=benchmark, line_dash="dot", line_color="red", annotation_text="0.2% Threshold")
+    fig.add_hline(y=benchmark, line_dash="dash", line_color="red", annotation_text="Threshold")
 
-    fig.update_layout(title=f"Trend: {target_ipc}", height=650, template='plotly_white', hovermode="x unified",
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_layout(
+        title=f"Multilayered Trend: {target_ipc}", 
+        height=700, 
+        template='plotly_white', 
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     st.plotly_chart(fig, use_container_width=True)
-    
-    st.subheader("Momentum Summary Table")
-    st.dataframe(pri_ma.tail(12), use_container_width=True, hide_index=True)
 
 # 7. MONTHLY FILING
 with tabs[6]:
@@ -216,5 +220,3 @@ with tabs[6]:
     m_order = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     counts = yr_data.groupby('Month_Name').size().reindex(m_order, fill_value=0).reset_index(name='Apps')
     st.plotly_chart(px.bar(counts, x='Month_Name', y='Apps', text='Apps', height=750, color_discrete_sequence=['#001f3f']), use_container_width=True)
-    st.subheader("Monthly Audit")
-    st.dataframe(counts, use_container_width=True, hide_index=True)
